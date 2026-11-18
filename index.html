@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>กล้องเส้นชัย</title>
+<style>
+:root{--bg:#111;--fg:#f3f3f3;--card:#1e1e1e;--acc:#e53935;--ok:#2e7d32;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--bg:#f4f4f4;--fg:#181818;--card:#fff}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,"Noto Sans Thai",sans-serif}
+#cam{position:relative;width:100%;height:50vh;background:#000;overflow:hidden}
+video{width:100%;height:100%;object-fit:cover}
+#line{position:absolute;top:0;bottom:0;left:50%;width:3px;margin-left:-1.5px;background:var(--acc);box-shadow:0 0 6px var(--acc)}
+#flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .25s}
+#hud{position:absolute;top:8px;left:8px;right:8px;display:flex;justify-content:space-between;font-weight:700;text-shadow:0 1px 3px #000;color:#fff}
+#msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:20px;color:#fff;background:#000a}
+#msg[hidden]{display:none}
+.bar{display:flex;gap:8px;padding:10px;flex-wrap:wrap}
+button{flex:1;min-width:30%;padding:14px 8px;font-size:16px;border:0;border-radius:10px;background:var(--card);color:var(--fg);font-weight:700}
+button.go{background:var(--ok);color:#fff}button.stop{background:var(--acc);color:#fff}
+.set{padding:0 12px 6px;font-size:14px;display:flex;align-items:center;gap:10px}
+.set input{flex:1}
+#list{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;padding:10px}
+.it{background:var(--card);border-radius:10px;overflow:hidden;position:relative}
+.it img{width:100%;display:block}
+.it b{position:absolute;top:6px;left:6px;background:var(--acc);color:#fff;border-radius:8px;padding:2px 10px;font-size:20px}
+.it div{display:flex;justify-content:space-between;align-items:center;padding:6px 10px;font-size:14px}
+.it button{flex:none;min-width:0;padding:4px 10px;font-size:13px}
+#big{position:fixed;inset:0;background:#000e;display:none;flex-direction:column;align-items:center;justify-content:center;z-index:9;color:#fff;padding:10px;text-align:center}
+#big img{max-width:100%;max-height:85%}
+</style>
+</head>
+<body>
+<div id="cam">
+  <video id="v" playsinline muted autoplay></video>
+  <div id="line"></div><div id="flash"></div>
+  <div id="hud"><span id="st">พร้อม</span><span id="clk">00:00.0</span></div>
+  <div id="msg">กำลังเปิดกล้อง…</div>
+</div>
+<div class="bar">
+  <button id="go" class="go">▶ เริ่มแข่ง</button>
+  <button id="man">📸 ถ่ายเอง</button>
+  <button id="rst">↺ ล้างผล</button>
+</div>
+<div class="set"><label for="sens">ความไว</label><input id="sens" type="range" min="4" max="40" value="14"><span id="sv">14</span></div>
+<div id="list"></div>
+<div id="big"><img id="bi" alt=""><p>กดค้างที่รูปเพื่อบันทึก · แตะที่ว่างเพื่อปิด</p></div>
+<script>
+const $=id=>document.getElementById(id);
+const v=$('v'),msg=$('msg'),list=$('list');
+const sc=document.createElement('canvas'),sx=sc.getContext('2d',{willReadFrequently:true});
+let running=false,t0=0,last=0,bg=null,shots=[],facing='environment';
+const SW=160;
+
+async function startCam(){
+  try{
+    const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:facing},width:{ideal:1280},height:{ideal:720}},audio:false});
+    v.srcObject=s;await v.play();msg.hidden=true;requestAnimationFrame(loop);
+  }catch(e){
+    msg.hidden=false;
+    msg.textContent='เปิดกล้องไม่ได้: โปรดอนุญาตการใช้กล้อง และเปิดผ่าน https (หรือเปิดลิงก์ในแท็บใหม่ของเบราว์เซอร์)';
+  }
+}
+function fmt(ms){const s=ms/1000,m=Math.floor(s/60);return String(m).padStart(2,'0')+':'+(s%60).toFixed(1).padStart(4,'0')}
+
+function loop(){
+  if(v.videoWidth){
+    const sh=Math.round(SW*v.videoHeight/v.videoWidth);
+    if(sc.width!==SW||sc.height!==sh){sc.width=SW;sc.height=sh;bg=null}
+    sx.drawImage(v,0,0,SW,sh);
+    const x0=SW/2-2,d=sx.getImageData(x0,0,4,sh).data,n=4*sh,g=new Float32Array(n);
+    for(let i=0;i<n;i++)g[i]=(d[i*4]+d[i*4+1]+d[i*4+2])/3;
+    if(!bg)bg=g.slice();
+    let c=0;for(let i=0;i<n;i++)if(Math.abs(g[i]-bg[i])>28)c++;
+    const ratio=c/n*100,now=performance.now();
+    if(running){
+      $('clk').textContent=fmt(now-t0);
+      if(ratio>+$('sens').value&&now-last>1200){last=now;capture(now-t0)}
+    }
+    const a=ratio>+$('sens').value?0.01:0.06;       // พื้นหลังปรับช้าลงขณะมีวัตถุผ่าน
+    for(let i=0;i<n;i++)bg[i]+= (g[i]-bg[i])*a;
+  }
+  requestAnimationFrame(loop);
+}
+
+function capture(ms){
+  const W=Math.min(v.videoWidth,1280),H=Math.round(W*v.videoHeight/v.videoWidth);
+  const c=document.createElement('canvas');c.width=W;c.height=H;
+  const x=c.getContext('2d');x.drawImage(v,0,0,W,H);
+  const rank=shots.length+1,label='อันดับ '+rank+'  '+fmt(ms);
+  x.fillStyle='#000b';x.fillRect(0,0,W,Math.round(H*.1));
+  x.fillStyle='#fff';x.font='bold '+Math.round(H*.07)+'px sans-serif';x.fillText(label,12,Math.round(H*.075));
+  x.fillStyle='#e53935';x.fillRect(W/2-1.5,Math.round(H*.1),3,H);
+  shots.push({src:c.toDataURL('image/jpeg',.85),ms});
+  render();
+  const f=$('flash');f.style.opacity=.8;setTimeout(()=>f.style.opacity=0,120);
+  try{navigator.vibrate&&navigator.vibrate(80)}catch(e){}
+}
+
+function render(){
+  list.innerHTML='';
+  shots.forEach((s,i)=>{
+    const d=document.createElement('div');d.className='it';
+    d.innerHTML='<b>'+(i+1)+'</b><img alt="อันดับ '+(i+1)+'"><div><span>'+fmt(s.ms)+'</span><button>ลบ</button></div>';
+    d.querySelector('img').src=s.src;
+    d.querySelector('img').onclick=()=>{$('bi').src=s.src;$('big').style.display='flex'};
+    d.querySelector('button').onclick=()=>{shots.splice(i,1);render()};
+    list.appendChild(d);
+  });
+  $('st').textContent=running?'กำลังแข่ง · '+shots.length+' คน':'พร้อม';
+}
+
+$('go').onclick=()=>{
+  running=!running;
+  const b=$('go');
+  if(running){t0=performance.now();last=0;bg=null;b.textContent='■ หยุด';b.className='stop'}
+  else{b.textContent='▶ เริ่มแข่ง';b.className='go'}
+  render();
+};
+$('man').onclick=()=>capture(running?performance.now()-t0:0);
+$('rst').onclick=()=>{if(!shots.length||confirm('ล้างรูปทั้งหมด?')){shots=[];render()}};
+$('sens').oninput=e=>$('sv').textContent=e.target.value;
+$('big').onclick=()=>$('big').style.display='none';
+startCam();
+</script>
+</body>
+</html>
